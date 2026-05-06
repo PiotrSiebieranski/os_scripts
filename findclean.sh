@@ -1,7 +1,7 @@
 #!/bin/bash
 
 WERSJA="1.0"
-AUTOR="Student"
+AUTOR="Piotr Siebierański"
 KATALOG="$HOME"
 ROZSZERZENIE=""
 MIN_ROZMIAR=""

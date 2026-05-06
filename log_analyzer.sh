@@ -1,7 +1,7 @@
 #!/bin/bash
 
 WERSJA="1.0"
-AUTOR="Student"
+AUTOR="Piotr Siebierański"
 PLIK_LOGU="/var/log/syslog"
 POZIOM="ALL"
 LICZBA=20

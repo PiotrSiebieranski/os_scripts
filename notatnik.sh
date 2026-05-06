@@ -1,7 +1,7 @@
 #!/bin/bash
 
 WERSJA="1.0"
-AUTOR="Student"
+AUTOR="Piotr Siebierański"
 KATALOG_NOTATEK="$HOME/.notatnik"
 WYNIK_TMP=$(mktemp)
 mkdir -p "$KATALOG_NOTATEK"
