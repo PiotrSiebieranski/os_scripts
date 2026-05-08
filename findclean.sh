@@ -1,6 +1,16 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-WERSJA="1.0"
+# Ten skrypt to wielofunkcyjne narzędzie do porządkowania dysku. Jego
+# głównym zadaniem jest wyszukiwanie plików według precyzyjnych
+# kryteriów, a następnie wykonanie na nich konkretnej akcji:
+# wyświetlenia listy, policzenia zajmowanego miejsca, spakowania do
+# archiwum lub ich trwałego usunięcia.
+
+# Przykład: ./findclean.sh -e log -m 10 -S // znajdź wszystkie pliki
+# `.log` w katalogu domowym które mają więcej niż 10 MB i wyświetl ile
+# zajmują miejsca
+
+WERSJA="1.1"
 AUTOR="Piotr Siebierański"
 KATALOG="$HOME"
 ROZSZERZENIE=""
@@ -15,7 +25,7 @@ PUSTY=0
 
 pokaz_pomoc() {
     echo "Użycie: $(basename "$0") [OPCJE]"
-    echo "  -d KATALOG    Katalog do przeszukania (domyślnie: \$HOME)"
+    echo "  -d KATALOG    Katalog do przeszukania (domyślnie: $HOME)"
     echo "  -e ROZSZ.     Filtruj po rozszerzeniu (np. txt, log)"
     echo "  -m MB         Minimalny rozmiar w MB"
     echo "  -M MB         Maksymalny rozmiar w MB"
@@ -31,9 +41,10 @@ pokaz_pomoc() {
 
 pokaz_statystyki() {
     local liczba rozmiar_sum
-    liczba=$(echo "$1" | grep -c .)
-    rozmiar_sum=$(echo "$1" | xargs -d '\n' du -sch 2>/dev/null | tail -1 | cut -f1)
+    liczba=$(echo "$1" | grep -v '^$' | wc -l)
+    rozmiar_sum=$(echo "$1" | xargs -d '\n' du -ch 2>/dev/null | tail -1 | cut -f1)
     echo "========================================"
+    echo "  Statystyki dla znalezionych plików:"
     echo "  Liczba plików : $liczba"
     echo "  Łączny rozmiar: ${rozmiar_sum:-0}"
     echo "========================================"
@@ -59,46 +70,53 @@ done
 
 [[ ! -d "$KATALOG" ]] && { echo "Błąd: '$KATALOG' nie istnieje." >&2; exit 1; }
 [[ -n "$MIN_ROZMIAR" && ! "$MIN_ROZMIAR" =~ ^[0-9]+$ ]] && { echo "Błąd: rozmiar musi być liczbą." >&2; exit 1; }
+[[ -n "$MAX_ROZMIAR" && ! "$MAX_ROZMIAR" =~ ^[0-9]+$ ]] && { echo "Błąd: rozmiar musi być liczbą." >&2; exit 1; }
 [[ -n "$WIEK_DNI"    && ! "$WIEK_DNI"    =~ ^[0-9]+$ ]] && { echo "Błąd: dni musi być liczbą."    >&2; exit 1; }
 
 FIND_CMD=(find "$KATALOG" -type f)
 [[ -n "$ROZSZERZENIE" ]] && FIND_CMD+=(-name "*.${ROZSZERZENIE}")
 [[ -n "$MIN_ROZMIAR"  ]] && FIND_CMD+=(-size +"${MIN_ROZMIAR}M")
 [[ -n "$MAX_ROZMIAR"  ]] && FIND_CMD+=(-size -"${MAX_ROZMIAR}M")
-[[ -n "$WIEK_DNI"     ]] && FIND_CMD+=(-mtime +"${WIEK_DNI}")
-[[ "$PUSTY" -eq 1     ]] && FIND_CMD+=(-empty)
+[[ -n "$WIEK_DNI"      ]] && FIND_CMD+=(-mtime +"${WIEK_DNI}")
+[[ "$PUSTY" -eq 1      ]] && FIND_CMD+=(-empty)
 
 echo "========================================"
-echo "  FINDCLEAN – wyszukiwanie plików"
+echo "  FINDCLEAN – wyniki wyszukiwania"
 echo "  Katalog : $KATALOG"
 [[ -n "$ROZSZERZENIE" ]] && echo "  Typ     : *.${ROZSZERZENIE}"
-[[ -n "$MIN_ROZMIAR"  ]] && echo "  Min.    : ${MIN_ROZMIAR} MB"
-[[ -n "$MAX_ROZMIAR"  ]] && echo "  Maks.   : ${MAX_ROZMIAR} MB"
-[[ -n "$WIEK_DNI"     ]] && echo "  Wiek    : >${WIEK_DNI} dni"
 echo "========================================"
 
 WYNIKI=$("${FIND_CMD[@]}" 2>/dev/null)
 
 if [[ -z "$WYNIKI" ]]; then
-    echo "  Brak plików spełniających kryteria."; exit 0
+    echo "  Brak plików spełniających kryteria."
+    exit 0
 fi
 
 echo "$WYNIKI"
 
-[[ "$TRYB_STATS"   -eq 1 ]] && pokaz_statystyki "$WYNIKI"
-[[ -n "$PLIK_WYJSCIA"    ]] && { echo "$WYNIKI" > "$PLIK_WYJSCIA"; echo "  Zapisano do: $PLIK_WYJSCIA"; }
+[[ "$TRYB_STATS" -eq 1 ]] && pokaz_statystyki "$WYNIKI"
+
+if [[ -n "$PLIK_WYJSCIA" ]]; then
+    echo "$WYNIKI" > "$PLIK_WYJSCIA"
+    echo "  [OK] Lista zapisana w: $PLIK_WYJSCIA"
+fi
 
 if [[ "$TRYB_ARCHIWUM" -eq 1 ]]; then
     ARCHIWUM="findclean_$(date +%Y%m%d_%H%M%S).tar.gz"
-    echo "$WYNIKI" | xargs tar -czf "$ARCHIWUM" 2>/dev/null
-    echo "  Zarchiwizowano do: $ARCHIWUM"
+    echo "$WYNIKI" | xargs -d '\n' tar -czf "$ARCHIWUM" 2>/dev/null
+    echo "  [OK] Archiwum utworzone: $ARCHIWUM"
 fi
 
 if [[ "$TRYB_USUN" -eq 1 ]]; then
-    read -rp "  Czy usunąć znalezione pliki? [t/N]: " ODPOWIEDZ
+    echo ""
+    read -rp "  UWAGA: Czy na pewno usunąć te pliki? [t/N]: " ODPOWIEDZ
     if [[ "$ODPOWIEDZ" =~ ^[tT]$ ]]; then
-        echo "$WYNIKI" | xargs rm -f 2>/dev/null && echo "  Pliki usunięte."
+        echo "$WYNIKI" | xargs -d '\n' rm -f 2>/dev/null
+        echo "  [OK] Pliki zostały usunięte."
     else
-        echo "  Anulowano."
+        echo "  Operacja anulowana."
     fi
 fi
+
+echo "========================================"

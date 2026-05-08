@@ -1,6 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-WERSJA="1.0"
+# Ten skrypt to narzędzie do analizy plików logów systemowych. Pozwala na
+# filtrowanie wpisów według poziomu logowania (ERROR, WARN, INFO), wyszukiwanie
+# konkretnych fraz, generowanie statystyk oraz zapisywanie wyników do pliku.
+
+WERSJA="1.1"
 AUTOR="Piotr Siebierański"
 PLIK_LOGU="/var/log/syslog"
 POZIOM="ALL"
@@ -27,16 +31,16 @@ pokaz_statystyki() {
   echo "========================================"
   echo "  STATYSTYKI: $(basename "$1")"
   echo "  Łącznie linii : $(wc -l < "$1")"
-  echo "  ERROR         : $(grep -ci 'error' "$1" 2>/dev/null)"
-  echo "  WARN          : $(grep -ci 'warn'  "$1" 2>/dev/null)"
-  echo "  INFO          : $(grep -ci 'info'  "$1" 2>/dev/null)"
+  echo "  ERROR         : $(grep -Ei 'error' "$1" | wc -l)"
+  echo "  WARN          : $(grep -Ei 'warn|warning' "$1" | wc -l)"
+  echo "  INFO          : $(grep -Ei 'info' "$1" | wc -l)"
   echo "========================================"
 }
 
 while getopts "f:l:n:o:s:rSvh" opt; do
   case "$opt" in
     f) PLIK_LOGU="$OPTARG" ;;
-    l) POZIOM=$(echo "$OPTARG" | tr '[:lower:]' '[:upper:]') ;;
+    l) POZIOM=$(echo "$OPTARG" | tr '[:lower:]' '[:upper:]' ) ;;
     n) LICZBA="$OPTARG" ;;
     o) PLIK_WYJSCIA="$OPTARG" ;;
     s) SZUKANA="$OPTARG" ;;
@@ -53,9 +57,9 @@ done
 
 case "$POZIOM" in
   ERROR) WZORZEC="error" ;;
-  WARN)  WZORZEC="warn"  ;;
-  INFO)  WZORZEC="info"  ;;
-  ALL)   WZORZEC="error\|warn\|info" ;;
+  WARN)  WZORZEC="warn|warning" ;;
+  INFO)  WZORZEC="info" ;;
+  ALL)   WZORZEC=".*" ;;
   *)     echo "Błąd: nieznany poziom '$POZIOM'. Użyj: ERROR, WARN, INFO, ALL." >&2; exit 1 ;;
 esac
 
@@ -66,32 +70,31 @@ echo "  WYNIKI – ostatnie $LICZBA wpisów [${POZIOM}]"
 [[ -n "$SZUKANA" ]] && echo "  Fraza: $SZUKANA"
 echo "========================================"
 
-[[ "$ODWROTNIE" -eq 1 ]] && SORT_OPT="" || SORT_OPT="-r"
+if [[ "$ODWROTNIE" -eq 1 ]]; then
+    WYNIKI=$(grep -Ei "$WZORZEC" "$PLIK_LOGU" | { [[ -n "$SZUKANA" ]] && grep -Ei "$SZUKANA" || cat; } | head -n "$LICZBA")
+else
+    WYNIKI=$(grep -Ei "$WZORZEC" "$PLIK_LOGU" | { [[ -n "$SZUKANA" ]] && grep -Ei "$SZUKANA" || cat; } | tail -n "$LICZBA")
+fi
 
-WYNIKI=$(
-  grep -i "$WZORZEC" "$PLIK_LOGU" \
-    | { [[ -n "$SZUKANA" ]] && grep -i "$SZUKANA" || cat; } \
-    | sort $SORT_OPT \
-    | tail -n "$LICZBA" \
-    | sed \
+WYNIKI_FORMATTED=$(echo "$WYNIKI" | sed \
     -e 's/error/ERROR/gI' \
-    -e 's/warning\|warn/WARN/gI' \
+    -e 's/warning/WARN/gI' \
+    -e 's/warn/WARN/gI' \
     -e 's/[[:space:]]\+/ /g' \
     -e 's/^[[:space:]]*//' \
-    -e 's/[[:space:]]*$//'
-  )
+    -e 's/[[:space:]]*$//')
 
-  if [[ -z "$WYNIKI" ]]; then
-    echo "  Brak wyników dla podanych kryteriów."
-  else
-    echo "$WYNIKI"
-    echo ""
-    echo "  Znaleziono: $(echo "$WYNIKI" | wc -l) linii"
-  fi
+if [[ -z "$WYNIKI" ]]; then
+  echo "  Brak wyników dla podanych kryteriów."
+else
+  echo "$WYNIKI_FORMATTED"
+  echo ""
+  echo "  Znaleziono: $(echo "$WYNIKI" | grep -v '^$' | wc -l) linii"
+fi
 
-  if [[ -n "$PLIK_WYJSCIA" ]]; then
-    echo "$WYNIKI" > "$PLIK_WYJSCIA"
-    echo "  Zapisano do: $PLIK_WYJSCIA"
-  fi
+if [[ -n "$PLIK_WYJSCIA" && -n "$WYNIKI" ]]; then
+  echo "$WYNIKI_FORMATTED" > "$PLIK_WYJSCIA"
+  echo "  Zapisano do: $PLIK_WYJSCIA"
+fi
 
-  echo "========================================"
+echo "========================================"

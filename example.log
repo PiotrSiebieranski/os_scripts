@@ -1,0 +1,5 @@
+May 08 22:54:17 arch NetworkManager[950]: <info> [1778273657.6047] device (wlp0s20f3): state: completed -> disconnected
+May 08 22:54:18 arch NetworkManager[950]: <warn> [1778273658.1234] device (wlp0s20f3): low signal strength detected!
+May 08 22:54:18 arch NetworkManager[950]: <error> [1778273658.5555] dhcp4 (wlp0s20f3): fatal error, could not assign address
+May 08 22:54:18 arch NetworkManager[950]: <info> [1778273658.5806] dhcp4 (wlp0s20f3): state changed new lease
+May 08 22:54:19 arch NetworkManager[950]: <error> [1778273659.0001] CRITICAL: WiFi interface died unexpectedly

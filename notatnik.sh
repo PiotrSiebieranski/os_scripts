@@ -1,20 +1,19 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-WERSJA="1.0"
+WERSJA="1.2"
 AUTOR="Piotr Siebierański"
 KATALOG_NOTATEK="$HOME/.notatnik"
 WYNIK_TMP=$(mktemp)
 mkdir -p "$KATALOG_NOTATEK"
+shopt -s nullglob
+trap 'rm -f "$WYNIK_TMP"' EXIT
 
 pokaz_pomoc() {
     echo "Użycie: $(basename "$0") [OPCJE]"
-    echo "  -d KATALOG   Katalog z notatkami (domyślnie: ~/.notatnik)"
-    echo "  -v           Wersja i autor"
-    echo "  -h           Pomoc"
+    echo "  -d KATALOG    Katalog z notatkami (domyślnie: ~/.notatnik)"
+    echo "  -v            Wersja i autor"
+    echo "  -h            Pomoc"
 }
-
-cleanup() { rm -f "$WYNIK_TMP"; }
-trap cleanup EXIT
 
 while getopts "d:vh" opt; do
     case "$opt" in
@@ -26,83 +25,72 @@ while getopts "d:vh" opt; do
 done
 
 lista_notatek() {
-    PLIKI=("$KATALOG_NOTATEK"/*.txt)
-    [[ ! -e "${PLIKI[0]}" ]] && { dialog --msgbox "Brak notatek." 6 40; return 1; }
-    OPCJE=()
+    local PLIKI=("$KATALOG_NOTATEK"/*.txt)
+    [[ ${#PLIKI[@]} -eq 0 ]] && { dialog --msgbox "Brak notatek." 6 40 ; return 1; }
+    local OPCJE=()
     for PLIK in "${PLIKI[@]}"; do
-        NAZWA=$(basename "$PLIK" .txt)
-        ROZMIAR=$(wc -c < "$PLIK")
-        OPCJE+=("$PLIK" "$NAZWA  [${ROZMIAR}B]")
+        OPCJE+=("$PLIK" "$(basename "$PLIK" .txt) [$(wc -c < "$PLIK")B]")
     done
-    dialog --title "Lista notatek" --menu "Wybierz notatkę:" 20 70 10 "${OPCJE[@]}" 2>"$WYNIK_TMP" || return 1
+    dialog --title "Lista notatek" --menu "Wybierz notatkę:" 20 70 10 \
+        "${OPCJE[@]}" 2>"$WYNIK_TMP" </dev/tty >/dev/tty || return 1
     cat "$WYNIK_TMP"
 }
 
 dodaj_notatke() {
-    dialog --title "Nowa notatka" --inputbox "Podaj tytuł:" 8 50 "" 2>"$WYNIK_TMP" || return
-    TYTUL=$(cat "$WYNIK_TMP" | tr ' ' '_' | tr -cd '[:alnum:]_-')
+    dialog --title "Nowa notatka" --inputbox "Podaj tytuł (bez spacji):" 8 50 "" 2>"$WYNIK_TMP" || return
+    local TYTUL; TYTUL=$(cat "$WYNIK_TMP" | tr ' ' '_' | tr -cd '[:alnum:]_-')
     [[ -z "$TYTUL" ]] && { dialog --msgbox "Tytuł nie może być pusty!" 6 40; return; }
-    PLIK="$KATALOG_NOTATEK/${TYTUL}_$(date +%Y%m%d).txt"
-    dialog --title "Treść: $TYTUL" --editbox /dev/null 20 70 2>"$WYNIK_TMP" || return
+    local PLIK="$KATALOG_NOTATEK/${TYTUL}_$(date +%Y%m%d).txt"
+    touch "$PLIK"
+    dialog --title "Treść: $TYTUL" --editbox "$PLIK" 20 70 2>"$WYNIK_TMP" || { rm -f "$PLIK"; return; }
     cat "$WYNIK_TMP" > "$PLIK"
     dialog --msgbox "Notatka '$TYTUL' zapisana." 6 50
 }
 
-podglad_notatki() {
-    WYBRANY=$(lista_notatek) || return
-    dialog --title "$(basename "$WYBRANY" .txt)" --textbox "$WYBRANY" 20 70
-}
-
 edytuj_notatke() {
-    WYBRANY=$(lista_notatek) || return
-    dialog --title "Edycja: $(basename "$WYBRANY" .txt)" --editbox "$WYBRANY" 20 70 2>"$WYNIK_TMP" || return
+    local WYBRANY; WYBRANY=$(lista_notatek) || return
+    dialog --title "Edycja: $(basename "$WYBRANY" .txt)" --editbox "$WYBRANY" 22 75 2>"$WYNIK_TMP" || return
     cat "$WYNIK_TMP" > "$WYBRANY"
     dialog --msgbox "Notatka zaktualizowana." 6 40
 }
 
 usun_notatke() {
-    WYBRANY=$(lista_notatek) || return
-    NAZWA=$(basename "$WYBRANY" .txt)
-    dialog --title "Potwierdzenie" --yesno "Usunąć notatkę '$NAZWA'?" 7 50 || return
+    local WYBRANY; WYBRANY=$(lista_notatek) || return
+    local NAZWA; NAZWA=$(basename "$WYBRANY" .txt)
+    dialog --title "Potwierdzenie" --yesno "Usunąć notatkę '$NAZWA'?" 7 55 || return
     rm -f "$WYBRANY"
     dialog --msgbox "Notatka '$NAZWA' usunięta." 6 50
 }
 
 szukaj_notatek() {
     dialog --title "Szukaj" --inputbox "Podaj szukaną frazę:" 8 50 "" 2>"$WYNIK_TMP" || return
-    FRAZA=$(cat "$WYNIK_TMP")
+    local FRAZA; FRAZA=$(cat "$WYNIK_TMP")
     [[ -z "$FRAZA" ]] && return
-    WYNIKI=$(grep -ril "$FRAZA" "$KATALOG_NOTATEK" 2>/dev/null)
-    if [[ -z "$WYNIKI" ]]; then
-        dialog --msgbox "Nie znaleziono: '$FRAZA'" 7 50
-    else
-        PODGLAD=""
-        while IFS= read -r PLIK; do
-            PODGLAD+="=== $(basename "$PLIK" .txt) ===\n"
-            PODGLAD+="$(grep -i --color=never "$FRAZA" "$PLIK")\n\n"
-        done <<< "$WYNIKI"
-        echo -e "$PODGLAD" > "$WYNIK_TMP"
-        dialog --title "Wyniki: '$FRAZA'" --textbox "$WYNIK_TMP" 20 70
-    fi
+    local WYNIKI; WYNIKI=$(grep -ril "$FRAZA" "$KATALOG_NOTATEK" 2>/dev/null)
+    [[ -z "$WYNIKI" ]] && { dialog --msgbox "Nie znaleziono: '$FRAZA'" 7 50; return; }
+    local PODGLAD=""
+    while IFS= read -r PLIK; do
+        PODGLAD+="=== $(basename "$PLIK" .txt) ===\n$(grep -i "$FRAZA" "$PLIK")\n\n"
+    done <<< "$WYNIKI"
+    echo -e "$PODGLAD" > "$WYNIK_TMP"
+    dialog --title "Wyniki dla: '$FRAZA'" --textbox "$WYNIK_TMP" 20 70
 }
 
 while true; do
-    dialog --title "Notatnik v${WERSJA}" --menu "Wybierz opcję:" 16 50 6 \
-        1 "Dodaj nową notatkę" \
-        2 "Przeglądaj notatki" \
-        3 "Edytuj notatkę" \
-        4 "Usuń notatkę" \
-        5 "Szukaj w notatkach" \
-        6 "Wyjście" 2>"$WYNIK_TMP"
-    [[ $? -ne 0 ]] && break
+    dialog --title "Notatnik v${WERSJA}" --cancel-label "Wyjście" \
+        --menu "Menu główne:" 16 55 5 \
+        1 "Dodaj nową notatkę"         \
+        2 "Podgląd notatki"            \
+        3 "Edytuj istniejącą notatkę"  \
+        4 "Usuń notatkę"               \
+        5 "Szukaj w treści notatek"    2>"$WYNIK_TMP" || break
     case $(cat "$WYNIK_TMP") in
         1) dodaj_notatke ;;
-        2) podglad_notatki ;;
+        2) WYBRANY=$(lista_notatek) && dialog --title "$(basename "$WYBRANY" .txt)" --textbox "$WYBRANY" 22 75 ;;
         3) edytuj_notatke ;;
         4) usun_notatke ;;
         5) szukaj_notatek ;;
-        6) break ;;
     esac
 done
 
-clear && echo "Do widzenia!"
+clear; echo "Notatnik został zamknięty."
