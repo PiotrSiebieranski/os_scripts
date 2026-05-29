@@ -1,0 +1,123 @@
+\documentclass[a4paper,11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[polish]{babel}
+\usepackage[margin=2cm]{geometry}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\setlength{\headheight}{14pt}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{array}
+
+% Nagłówek i stopka
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\textit{Projekt skryptu — meteo}}
+\lhead{\textit{[Piotr Siebierański]}}
+\cfoot{\thepage}
+
+% Formatowanie sekcji
+\titleformat{\section}{\large\bfseries}{}{0em}{}[\titlerule]
+\titlespacing{\section}{0pt}{12pt}{6pt}
+
+\begin{document}
+
+% ───────────────────────────── NAGŁÓWEK ─────────────────────────────
+\begin{center}
+    {\LARGE\bfseries Projekt skryptu: \texttt{meteo}}\\[6pt]
+    {\large [Piotr Siebierański]}\\[2pt]
+    {\small Systemy operacyjne — projekt dużego skryptu}
+\end{center}
+
+\vspace{4pt}
+\hrule
+\vspace{12pt}
+
+% ───────────────────────────── OPIS FUNKCJONALNOŚCI ─────────────────
+\section{Opis funkcjonalności}
+
+Skrypt \texttt{meteo} pobiera prognozę pogody dla podanej lokalizacji
+i prezentuje ją użytkownikowi w postaci wykresu graficznego generowanego
+przez program \texttt{gnuplot}. Skrypt umożliwia:
+
+\begin{itemize}[noitemsep]
+    \item pobieranie prognozy na 1--3 dni do przodu z serwisu \texttt{wttr.in},
+    \item wybór prezentowanych danych: temperatura, opady, prędkość wiatru,
+    \item generowanie wykresu PNG otwieranego automatycznie przez \texttt{xdg-open},
+    \item opcjonalny zapis wykresu do wskazanego pliku bez otwierania przeglądarki,
+    \item konfigurację domyślnych parametrów przez plik \texttt{.rc},
+    \item nadpisanie dowolnego parametru z linii poleceń.
+\end{itemize}
+
+% ───────────────────────────── OPIS DZIAŁANIA ───────────────────────
+\section{Opis działania}
+
+
+\begin{enumerate}[noitemsep]
+    \item Skrypt wczytuje plik konfiguracyjny (domyślnie \texttt{\textasciitilde/.meteorc},
+          możliwy do nadpisania flagą \texttt{-c}).
+    \item Parametry z linii poleceń nadpisują wartości z konfiguracji.
+    \item Skrypt tworzy katalog tymczasowy \texttt{/tmp/meteo\_\$\$} (gdzie \texttt{\$\$}
+          to PID procesu); po zakończeniu katalog jest usuwany przez \texttt{trap EXIT}.
+    \item Dane pogodowe są pobierane z API \texttt{wttr.in} w formacie JSON
+          i parsowane narzędziem \texttt{jq}.
+    \item Na podstawie pobranych danych generowany jest plik danych dla
+          \texttt{gnuplot}, a następnie wykres PNG.
+    \item Wykres jest otwierany przez \texttt{xdg-open} lub zapisywany do pliku,
+          jeśli podano flagę \texttt{-o}.
+\end{enumerate}
+
+\subsection*{Interfejs użytkownika}
+
+Skrypt działa wyłącznie z poziomu linii poleceń. Składnia wywołania:
+
+\begin{center}
+\texttt{meteo [opcje]}
+\end{center}
+
+\vspace{4pt}
+\begin{tabular}{>{\ttfamily}lp{10cm}}
+\toprule
+\textrm{Flaga} & Opis \\
+\midrule
+-l \textit{lokalizacja} & Nazwa miasta lub współrzędne (np. \texttt{Warszawa}, \texttt{51.1,17.0}) \\
+-d \textit{dni}         & Liczba dni prognozy (1--3, domyślnie z \texttt{.rc}) \\
+-t                      & Pokaż wykres temperatury \\
+-p                      & Pokaż wykres opadów \\
+-w                      & Pokaż wykres prędkości wiatru \\
+-o \textit{plik.png}    & Zapisz wykres do pliku zamiast otwierać \\
+-c \textit{plik}        & Użyj podanego pliku konfiguracyjnego \\
+-v                      & Wyświetl wersję i autora \\
+-h                      & Wyświetl krótką pomoc \\
+\bottomrule
+\end{tabular}
+
+\subsection*{Plik konfiguracyjny \texttt{.meteorc}}
+
+Plik konfiguracyjny przechowuje domyślne wartości parametrów.
+Przykładowa zawartość:
+
+\begin{verbatim}
+LOKALIZACJA="Warszawa"
+JEDNOSTKI="C"          # C = Celsjusz, F = Fahrenheit
+DNI=3
+GNUPLOT_PATH=""        # puste = szukaj w PATH
+JQ_PATH=""             # puste = szukaj w PATH
+\end{verbatim}
+
+Jeśli \texttt{GNUPLOT\_PATH} lub \texttt{JQ\_PATH} są puste, skrypt
+wykrywa ścieżki automatycznie przez \texttt{which}. Jeśli narzędzie
+nie zostanie znalezione, skrypt kończy działanie z czytelnym komunikatem błędu.
+
+\subsection*{Zależności zewnętrzne}
+
+\begin{itemize}[noitemsep]
+    \item \texttt{curl} — pobieranie danych z \texttt{wttr.in},
+    \item \texttt{jq} — parsowanie odpowiedzi JSON,
+    \item \texttt{gnuplot} — generowanie wykresu PNG,
+    \item \texttt{xdg-open} — otwieranie wykresu.
+\end{itemize}
+
+\end{document}
