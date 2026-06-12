@@ -1,0 +1,75 @@
+.TH METEO 1 "Czerwiec 2026" "1.0" "Podręcznik użytkownika skryptu meteo"
+.SH NAZWA
+meteo \- pobiera prognozę pogody z wttr.in i generuje wykresy za pomocą gnuplot
+.SH SKŁADNIA
+.B meteo
+.BI \-l " lokalizacja"
+[\fB\-d\fR \fI1-3\fR]
+[\fB\-t\fR]
+[\fB\-p\fR]
+[\fB\-w\fR]
+[\fB\-o\fR \fIplik.png\fR]
+[\fB\-c\fR \fIplik_rc\fR]
+.br
+.B meteo \-v
+.br
+.B meteo \-h
+.SH OPIS
+Skrypt pobiera prognozę pogody z serwisu \fBwttr.in\fR i rysuje wykresy za pomocą \fBgnuplot\fR.
+Domyślnie gotowy obraz PNG jest automatycznie otwierany przez \fBxdg-open\fR lub \fBopen\fR.
+.SH OPCJE
+.TP
+.BI \-l " lokalizacja"
+Nazwa miasta (np. \fIWarszawa\fR) lub współrzędne (np. \fI51.1,17.0\fR). Wymagana, jeśli nie ustawiono \fBLOKALIZACJA\fR w pliku RC.
+.TP
+.BI \-d " 1-3"
+Liczba dni prognozy (1, 2 lub 3). Domyślnie: 3.
+.TP
+.B \-t
+Panel temperatury.
+.TP
+.B \-p
+Panel opadów (mm).
+.TP
+.B \-w
+Panel prędkości wiatru (km/h).
+.TP
+.BI \-o " plik.png"
+Zapisz wykres do pliku (bez automatycznego otwierania).
+.TP
+.BI \-c " plik"
+Alternatywny plik konfiguracyjny (domyślnie \fI~/.meteorc\fR).
+.TP
+.B \-v
+Wersja i autor.
+.TP
+.B \-h
+Pomoc.
+.SH PLIK KONFIGURACYJNY
+Domyślnie \fB~/.meteorc\fR. Format: \fIKLUCZ="wartość"\fR, komentarze po \fI#\fR.
+Opcje z linii poleceń mają wyższy priorytet.
+.RS
+.nf
+LOKALIZACJA="Warszawa"
+JEDNOSTKI="C"       # C lub F
+DNI=3
+GNUPLOT_PATH=""
+JQ_PATH=""
+.fi
+.RE
+.SH ZALEŻNOŚCI
+.B bash\fR, \fBcurl\fR, \fBjq\fR, \fBgnuplot
+.SH PRZYKŁADY
+.TP
+.B meteo \-l Warszawa \-t \-p
+Temperatura i opady dla Warszawy (3 dni).
+.TP
+.B meteo \-l "51.1,17.0" \-w \-o wiatr.png
+Wykres wiatru do pliku.
+.TP
+.B meteo \-l Kraków \-d 2 \-t \-p \-w
+Pełny wykres trójpanelowy na 2 dni.
+.SH DIAGNOSTYKA
+Status \fB0\fR przy sukcesie, \fB1\fR przy błędzie (komunikat na stderr).
+.SH AUTOR
+Piotr Siebierański

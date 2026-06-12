@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+# Użycie: meteo -l <lokalizacja> [-d 1-3] [-t] [-p] [-w] [-o plik.png] [-c rc] [-v] [-h]
+
+set -euo pipefail
+
+VERSION="1.0"
+AUTHOR="meteo-script"
+DEFAULT_RC="${HOME}/.meteorc"
+
+TMPDIR_METEO="/tmp/meteo$$"
+mkdir -p "$TMPDIR_METEO"
+trap 'rm -rf "$TMPDIR_METEO"' EXIT
+
+LOKALIZACJA=""
+JEDNOSTKI="C"
+DNI=3
+GNUPLOT_PATH=""
+JQ_PATH=""
+SHOW_TEMP=0
+SHOW_PREC=0
+SHOW_WIND=0
+OUTPUT_FILE=""
+RC_FILE="$DEFAULT_RC"
+
+RED=$'\033[0;31m'; YELLOW=$'\033[1;33m'; GREEN=$'\033[0;32m'
+CYAN=$'\033[0;36m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+
+die()  { echo -e "${RED}BŁĄD:${RESET} $*" >&2; exit 1; }
+info() { echo -e "${CYAN}->${RESET} $*" >&2; }
+warn() { echo -e "${YELLOW}!${RESET}  $*" >&2; }
+
+usage() {
+cat <<EOF
+${BOLD}Użycie:${RESET} $(basename "$0") -l <lokalizacja> [opcje]
+
+${BOLD}Opcje:${RESET}
+  -l <miasto>    Nazwa miasta lub współrzędne (np. Warszawa, 51.1,17.0)
+  -d <1-3>       Liczba dni prognozy (domyślnie: ${DNI})
+  -t             Pokaż wykres temperatury
+  -p             Pokaż wykres opadów
+  -w             Pokaż wykres prędkości wiatru
+  -o <plik.png>  Zapisz wykres do pliku zamiast otwierać
+  -c <plik>      Użyj podanego pliku konfiguracyjnego (domyślnie: ~/.meteorc)
+  -v             Wyświetl wersję i autora
+  -h             Wyświetl tę pomoc
+
+${BOLD}Przykłady:${RESET}
+  $(basename "$0") -l Warszawa -d 2 -t -p
+  $(basename "$0") -l "51.1,17.0" -d 3 -w -o wykres.png
+  $(basename "$0") -l Kraków -t -p -w
+
+${BOLD}Plik konfiguracyjny${RESET} (~/.meteorc):
+  LOKALIZACJA="Warszawa"
+  JEDNOSTKI="C"    # C = Celsjusz, F = Fahrenheit
+  DNI=3
+EOF
+}
+
+load_rc() {
+    local rc="$1"
+    [[ ! -f "$rc" ]] && return
+    info "Wczytuję konfigurację: $rc"
+    while IFS='=' read -r key val; do
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        key="${key// /}"
+        val="${val%%#*}"
+        val="${val//\"/}"
+        val="${val//\'/}"
+        val="${val%"${val##*[![:space:]]}"}"  # rtrim
+        case "$key" in
+            LOKALIZACJA) [[ -z "$LOKALIZACJA" ]] && LOKALIZACJA="$val" ;;
+            JEDNOSTKI)   JEDNOSTKI="$val" ;;
+            DNI)         DNI="$val" ;;
+            GNUPLOT_PATH) GNUPLOT_PATH="$val" ;;
+            JQ_PATH)      JQ_PATH="$val" ;;
+        esac
+    done < "$rc"
+}
+
+find_tool() {
+    local name="$1" hint="$2"
+    if [[ -n "$hint" ]]; then
+        [[ -x "$hint" ]] || die "Narzędzie '$name' nie znalezione pod ścieżką: $hint"
+        echo "$hint"
+        return
+    fi
+    # ZMIANA zsh→bash: zamiast ${+commands[$name]} używamy command -v
+    if command -v "$name" &>/dev/null; then
+        command -v "$name"
+    else
+        die "Wymagane narzędzie '${name}' nie zostało znalezione w PATH.\nZainstaluj je i spróbuj ponownie."
+    fi
+}
+
+fetch_weather() {
+    local loc="$1" days="$2"
+    local url="https://wttr.in/${loc// /+}?format=j1"
+    local outfile="$TMPDIR_METEO/weather.json"
+
+    info "Pobieram prognozę dla: ${BOLD}${loc}${RESET} (${days} dni)…"
+    if ! curl -fsSL --max-time 15 "$url" -o "$outfile" 2>/dev/null; then
+        die "Nie można pobrać danych z wttr.in.\nSprawdź połączenie sieciowe i nazwę lokalizacji."
+    fi
+    local size
+    size=$(wc -c < "$outfile")
+    if (( size < 100 )); then
+        die "Otrzymano pustą odpowiedź z serwera. Sprawdź nazwę lokalizacji."
+    fi
+}
+
+parse_weather() {
+    local json="$TMPDIR_METEO/weather.json"
+    local days="$1" unit="$2"
+    local datafile="$TMPDIR_METEO/data.tsv"
+    local meta="$TMPDIR_METEO/meta.txt"
+    local JQ
+    JQ=$(find_tool jq "$JQ_PATH")
+
+    # miasto i kraj do tytułu wykresu
+    "$JQ" -r '
+        .nearest_area[0].areaName[0].value + ", " +
+        .nearest_area[0].country[0].value
+    ' "$json" > "$meta"
+
+    # kolumna temp zależy od jednostki
+    local temp_field="tempC"
+    [[ "$unit" == "F" ]] && temp_field="tempF"
+
+    # nagłówek
+    echo -e "# czas\ttemp\topady_mm\twiatr_kmph" > "$datafile"
+
+    # dane: iterujemy po dniach (limit $days) i godzinach
+    "$JQ" -r --arg days "$days" --arg tf "$temp_field" '
+        .weather[:($days|tonumber)] |
+        .[] |
+        .date as $date |
+        .hourly[] |
+        ( (.time|tonumber) / 100 ) as $h |
+        [ $date + " " + ($h|floor|tostring|if length==1 then "0"+. else . end) + ":00",
+          .[$tf],
+          .precipMM,
+          .windspeedKmph
+        ] | @tsv
+    ' "$json" >> "$datafile"
+}
+
+generate_plot() {
+    local datafile="$1" outpng="$2" unit="$3"
+    local meta="$TMPDIR_METEO/meta.txt"
+    local gnuplot_script="$TMPDIR_METEO/plot.gp"
+    local city=""
+    [[ -f "$meta" ]] && city=$(cat "$meta")
+
+    local temp_unit="°C"
+    [[ "$unit" == "F" ]] && temp_unit="°F"
+
+    local nplots=0
+    (( SHOW_TEMP )) && (( ++nplots )) || true
+    (( SHOW_PREC )) && (( ++nplots )) || true
+    (( SHOW_WIND )) && (( ++nplots )) || true
+
+    if (( nplots == 0 )); then
+        die "Nie wybrano żadnego typu wykresu. Użyj -t, -p lub -w."
+    fi
+
+    local height=$(( nplots * 280 + 80 ))
+
+    cat > "$gnuplot_script" <<GPEOF
+set terminal pngcairo enhanced font "sans,11" size 1100,${height} background "#1e1e2e"
+set output "${outpng}"
+
+set style line 1 lc rgb "#89dceb" lw 2.5 pt 7 ps 0.6
+set style line 2 lc rgb "#89b4fa" lw 2.5
+set style line 3 lc rgb "#a6e3a1" lw 2.5
+
+set border lc rgb "#cdd6f4"
+set tics textcolor rgb "#cdd6f4"
+set key textcolor rgb "#cdd6f4" box lc rgb "#45475a"
+set grid lc rgb "#313244" lw 0.5
+
+set datafile separator "\t"
+set xdata time
+set timefmt "%Y-%m-%d %H:%M"
+set format x "%d.%m\n%H:%M"
+set xtics rotate by -30 font "sans,9"
+
+set multiplot layout ${nplots},1 title "Prognoza pogody: ${city}" \
+    font "sans bold,14" textcolor rgb "#cdd6f4"
+
+GPEOF
+
+    if (( SHOW_TEMP )); then
+        cat >> "$gnuplot_script" <<GPEOF
+set title "Temperatura (${temp_unit})" textcolor rgb "#cdd6f4" font "sans bold,12"
+set ylabel "Temperatura (${temp_unit})" textcolor rgb "#cdd6f4"
+set yrange [*:*]
+plot "${datafile}" using 1:2 with linespoints ls 1 title "Temperatura" , \
+     "${datafile}" using 1:2:2 with labels font "sans,8" textcolor rgb "#f5c2e7" offset 0,0.8 notitle
+
+GPEOF
+    fi
+
+if (( SHOW_PREC )); then
+        cat >> "$gnuplot_script" <<GPEOF
+set title "Opady (mm)" textcolor rgb "#cdd6f4" font "sans bold,12"
+set ylabel "Opady (mm)" textcolor rgb "#cdd6f4"
+set style fill solid 0.6 border lc rgb "#89b4fa"
+set boxwidth 0.02 relative
+set yrange [0:*]
+plot "${datafile}" using 1:3 with boxes ls 2 title "Opady (mm)"
+
+GPEOF
+    fi
+
+    if (( SHOW_WIND )); then
+        cat >> "$gnuplot_script" <<GPEOF
+set title "Prędkość wiatru (km/h)" textcolor rgb "#cdd6f4" font "sans bold,12"
+set ylabel "Wiatr (km/h)" textcolor rgb "#cdd6f4"
+set yrange [0:*]
+plot "${datafile}" using 1:4 with linespoints ls 3 title "Wiatr (km/h)"
+
+GPEOF
+    fi
+
+    echo "unset multiplot" >> "$gnuplot_script"
+
+    local GNUPLOT
+    GNUPLOT=$(find_tool gnuplot "$GNUPLOT_PATH")
+    "$GNUPLOT" "$gnuplot_script" 2>/tmp/gnuplot_err.txt \
+        || die "gnuplot zwrócił błąd: $(cat /tmp/gnuplot_err.txt)"
+}
+
+# ZMIANA zsh→bash: zamiast iterować po ${argv[i]} używamy pozycyjnych "$@"
+# Szukamy -c przed właściwym getopts, żeby wczytać RC przed resztą opcji
+args=("$@")
+for (( i=0; i<${#args[@]}; i++ )); do
+    if [[ "${args[i]}" == "-c" ]]; then
+        j=$(( i + 1 ))
+        RC_FILE="${args[j]}"
+    fi
+done
+
+load_rc "$RC_FILE"
+
+while getopts ":l:d:tpwo:c:vh" opt; do
+    case $opt in
+        l) LOKALIZACJA="$OPTARG" ;;
+        d) DNI="$OPTARG" ;;
+        t) SHOW_TEMP=1 ;;
+        p) SHOW_PREC=1 ;;
+        w) SHOW_WIND=1 ;;
+        o) OUTPUT_FILE="$OPTARG" ;;
+        c) ;;  # już przetworzone wyżej
+        v) echo -e "${BOLD}meteo${RESET} wersja ${VERSION} — ${AUTHOR}"; exit 0 ;;
+        h) usage; exit 0 ;;
+        :) die "Opcja -$OPTARG wymaga argumentu." ;;
+        \?) die "Nieznana opcja: -$OPTARG. Użyj -h aby wyświetlić pomoc." ;;
+    esac
+done
+
+[[ -z "$LOKALIZACJA" ]] && die "Nie podano lokalizacji. Użyj -l <miasto> lub ustaw LOKALIZACJA w ~/.meteorc"
+
+if [[ "$DNI" != "1" && "$DNI" != "2" && "$DNI" != "3" ]]; then
+    die "Liczba dni musi wynosić 1, 2 lub 3 (podano: $DNI)"
+fi
+
+if (( !SHOW_TEMP && !SHOW_PREC && !SHOW_WIND )); then
+    warn "Nie wybrano typu wykresu — domyślnie pokazuję temperaturę (-t)."
+    SHOW_TEMP=1
+fi
+
+[[ "$JEDNOSTKI" != "C" && "$JEDNOSTKI" != "F" ]] && \
+    die "Nieprawidłowa jednostka temperatury: '$JEDNOSTKI'. Użyj C lub F."
+
+find_tool curl "" > /dev/null
+GNUPLOT=$(find_tool gnuplot "$GNUPLOT_PATH")
+
+if [[ -n "$OUTPUT_FILE" ]]; then
+    FINAL_PNG="$OUTPUT_FILE"
+    OPEN_AFTER=0
+else
+    FINAL_PNG="$TMPDIR_METEO/meteo_wykres.png"
+    OPEN_AFTER=1
+fi
+
+fetch_weather "$LOKALIZACJA" "$DNI"
+parse_weather "$DNI" "$JEDNOSTKI"
+
+info "Generuję wykres…"
+generate_plot "$TMPDIR_METEO/data.tsv" "$FINAL_PNG" "$JEDNOSTKI"
+
+if [[ ! -f "$FINAL_PNG" ]]; then
+    die "Wykres nie został wygenerowany. Sprawdź logi powyżej."
+fi
+
+echo -e "${GREEN}->${RESET} Wykres gotowy: ${BOLD}${FINAL_PNG}${RESET}" >&2
+
+if (( OPEN_AFTER )); then
+    info "Otwieram wykres…"
+    if command -v xdg-open &>/dev/null; then
+        xdg-open "$FINAL_PNG" 2>/dev/null &
+    elif command -v open &>/dev/null; then
+        open "$FINAL_PNG" &
+    else
+        warn "Nie znaleziono xdg-open ani open — otwórz plik ręcznie: $FINAL_PNG"
+    fi
+    sleep 4
+else
+    echo -e "${GREEN}->${RESET} Zapisano do pliku: ${BOLD}${FINAL_PNG}${RESET}" >&2
+fi
